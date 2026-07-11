@@ -1,0 +1,20 @@
+/* @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap'); */
+
+@font-face {
+    font-family: 'Vazirmatn';
+    src: url('/fonts/Vazir-Medium.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+body,
+.fi-body,
+.fi-main,
+.fi-sidebar,
+.fi-topbar,
+.fi-btn,
+.fi-input,
+.fi-ta {
+    font-family: 'Vazirmatn', sans-serif !important;
+}

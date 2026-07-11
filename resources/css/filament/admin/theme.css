@@ -1,0 +1,9 @@
+@font-face {
+    font-family: 'Vazirmatn';
+    src: url('/fonts/Vazir-Medium.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* برای وزن‌های دیگر هم تکرار کنید */
