@@ -7,6 +7,7 @@ return [
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'], // 🎯 پذیرفتن تمام هدرهای سفارشی فرانت
     'exposed_headers' => [],
+    'cors_allowed_origins' => ['*'],
     'max_age' => 0,
     'supports_credentials' => true,
 ];

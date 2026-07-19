@@ -903,4 +903,560 @@ class NextCoreController extends Controller
             return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
         }
     }
+
+    /**
+     * مدیریت جلسات مشاوره اولیه (Consultation Sessions)
+     */
+    public function getConsultationSessions()
+    {
+        try {
+            $sessions = DB::table('consultation_sessions')
+                ->join('leads', 'consultation_sessions.lead_id', '=', 'leads.id')
+                ->leftJoin('agents', 'consultation_sessions.agent_id', '=', 'agents.id')
+                ->select(
+                    'consultation_sessions.*',
+                    'leads.name as lead_name',
+                    'leads.phone as lead_phone',
+                    'agents.name as agent_name'
+                )
+                ->orderBy('consultation_sessions.created_at', 'desc')
+                ->get();
+
+            return response()->json(['status' => 'success', 'data' => $sessions]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    public function storeConsultationSession(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'lead_id' => 'required|exists:leads,id',
+                'agent_id' => 'nullable|exists:agents,id',
+                'session_date' => 'required|date',
+                'session_type' => 'required|in:initial,followup,final',
+                'status' => 'required|in:scheduled,completed,cancelled',
+                'notes' => 'nullable|string',
+                'first_name' => 'nullable|string',
+                'last_name' => 'nullable|string',
+                'age' => 'nullable|integer',
+                'marital_status' => 'nullable|in:single,married',
+                'military_status' => 'nullable|in:exempt,served,serving,not_required',
+                'last_degree' => 'nullable|in:diploma,associate,bachelor,master,phd',
+                'gpa' => 'nullable|numeric',
+                'graduation_year' => 'nullable|integer',
+                'field_of_study' => 'nullable|string',
+                'language_degree' => 'nullable|in:ielts,toefl,duolingo,pte',
+                'language_score' => 'nullable|string',
+                'financial_capability' => 'nullable|integer',
+                'has_job_offer' => 'nullable|boolean',
+                'target_country' => 'nullable|string',
+                'visa_type' => 'nullable|in:study,work,investment,tourist',
+                'spouse_name' => 'nullable|string',
+                'spouse_phone' => 'nullable|string',
+            ]);
+
+            $sessionId = DB::table('consultation_sessions')->insertGetId([
+                'lead_id' => $validated['lead_id'],
+                'agent_id' => $validated['agent_id'] ?? null,
+                'session_date' => $validated['session_date'],
+                'session_type' => $validated['session_type'],
+                'status' => $validated['status'],
+                'notes' => $validated['notes'] ?? null,
+                'first_name' => $validated['first_name'] ?? null,
+                'last_name' => $validated['last_name'] ?? null,
+                'age' => $validated['age'] ?? null,
+                'marital_status' => $validated['marital_status'] ?? null,
+                'military_status' => $validated['military_status'] ?? null,
+                'last_degree' => $validated['last_degree'] ?? null,
+                'gpa' => $validated['gpa'] ?? null,
+                'graduation_year' => $validated['graduation_year'] ?? null,
+                'field_of_study' => $validated['field_of_study'] ?? null,
+                'language_degree' => $validated['language_degree'] ?? null,
+                'language_score' => $validated['language_score'] ?? null,
+                'financial_capability' => $validated['financial_capability'] ?? 0,
+                'has_job_offer' => $validated['has_job_offer'] ?? false,
+                'target_country' => $validated['target_country'] ?? null,
+                'visa_type' => $validated['visa_type'] ?? null,
+                'spouse_name' => $validated['spouse_name'] ?? null,
+                'spouse_phone' => $validated['spouse_phone'] ?? null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'جلسه مشاوره با موفقیت ثبت شد',
+                'session_id' => $sessionId
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 دریافت لیست قوانین جبران تاخیر
+     */
+    public function getDelayCompensationRules()
+    {
+        try {
+            $rules = DB::table('next_delay_compensation_rules')
+                ->where('is_active', true)
+                ->orderBy('delay_start_minutes')
+                ->get();
+
+            return response()->json(['status' => 'success', 'data' => $rules]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 ایجاد قانون جدید جبران تاخیر (فقط ادمین)
+     */
+    public function storeDelayCompensationRule(Request $request)
+    {
+        $allowedRoles = ['admin', 'supervisor'];
+        if (!in_array($request->user()->role, $allowedRoles)) {
+            return response()->json(['status' => 'error', 'message' => 'شما دسترسی لازم را ندارید.'], 403);
+        }
+
+
+        $request->validate([
+            'rule_name' => 'required|string',
+            'delay_start_minutes' => 'required|integer|min:0',
+            'delay_end_minutes' => 'required|integer|gt:delay_start_minutes',
+            'compensation_minutes' => 'required|integer|min:0',
+            'auto_leave_hours' => 'boolean',
+            'auto_leave_duration_hours' => 'nullable|integer|min:0',
+        ]);
+
+        try {
+            $ruleId = DB::table('next_delay_compensation_rules')->insertGetId([
+                'rule_name' => $request->rule_name,
+                'delay_start_minutes' => $request->delay_start_minutes,
+                'delay_end_minutes' => $request->delay_end_minutes,
+                'compensation_minutes' => $request->compensation_minutes,
+                'auto_leave_hours' => $request->auto_leave_hours ?? false,
+                'auto_leave_duration_hours' => $request->auto_leave_duration_hours ?? 0,
+                'is_active' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return response()->json(['status' => 'success', 'rule_id' => $ruleId]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 به‌روزرسانی قانون جبران تاخیر (فقط ادمین)
+     */
+    public function updateDelayCompensationRule(Request $request, $id)
+    {
+        $allowedRoles = ['admin', 'supervisor'];
+        if (!in_array($request->user()->role, $allowedRoles)) {
+            return response()->json(['status' => 'error', 'message' => 'شما دسترسی لازم را ندارید.'], 403);
+        }
+
+        try {
+            $updateData = [
+                'rule_name' => $request->rule_name,
+                'delay_start_minutes' => $request->delay_start_minutes,
+                'delay_end_minutes' => $request->delay_end_minutes,
+                'compensation_minutes' => $request->compensation_minutes,
+                'auto_leave_hours' => $request->auto_leave_hours ?? false,
+                'auto_leave_duration_hours' => $request->auto_leave_duration_hours ?? 0,
+                'is_active' => $request->is_active ?? true,
+                'updated_at' => now(),
+            ];
+
+            DB::table('next_delay_compensation_rules')->where('id', $id)->update($updateData);
+
+            return response()->json(['status' => 'success']);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 حذف قانون جبران تاخیر (فقط ادمین)
+     */
+    public function destroyDelayCompensationRule($id)
+    {
+        if (auth()->user()->role !== 'admin') {
+            return response()->json(['status' => 'error', 'message' => 'شما دسترسی لازم را ندارید.'], 403);
+        }
+
+        try {
+            DB::table('next_delay_compensation_rules')->where('id', $id)->delete();
+            return response()->json(['status' => 'success']);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 پردازش تاخیر برای یک رکورد تردد
+     */
+    public function processAttendanceDelay(Request $request)
+    {
+        $request->validate(['attendance_id' => 'required|integer']);
+
+        try {
+            $attendance = DB::table('next_attendance_clocks')->where('id', $request->attendance_id)->first();
+            
+            if (!$attendance) {
+                return response()->json(['status' => 'error', 'message' => 'رکورد تردد یافت نشد.'], 404);
+            }
+
+            $service = new \App\Services\DelayCompensationService();
+            $compensation = $service->processAttendanceDelay(
+                \App\Models\AttendanceClock::find($request->attendance_id)
+            );
+
+            if (!$compensation) {
+                return response()->json(['status' => 'success', 'message' => 'قانونی برای این تردد اعمال نشد.']);
+            }
+
+            return response()->json(['status' => 'success', 'data' => $compensation]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 ثبت جبران خدمت انجام شده
+     */
+    public function recordCompensationCompleted(Request $request)
+    {
+        $request->validate([
+            'compensation_id' => 'required|integer',
+            'minutes_completed' => 'required|integer|min:1',
+        ]);
+
+        try {
+            $service = new \App\Services\DelayCompensationService();
+            $result = $service->recordCompensationCompleted(
+                $request->compensation_id,
+                $request->minutes_completed
+            );
+
+            if ($result) {
+                return response()->json(['status' => 'success', 'message' => 'جبران خدمت با موفقیت ثبت شد.']);
+            }
+
+            return response()->json(['status' => 'error', 'message' => 'خطا در ثبت جبران خدمت.'], 500);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 دریافت گزارش جبران تاخیر کاربر
+     */
+    public function getUserDelayCompensations(Request $request)
+    {
+        try {
+            $userId = $request->user_id ?? auth()->id();
+            $startDate = $request->start_date;
+            $endDate = $request->end_date;
+
+            $service = new \App\Services\DelayCompensationService();
+            $report = $service->getUserCompensationReport($userId, $startDate, $endDate);
+
+            return response()->json(['status' => 'success', 'data' => $report]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 دریافت لیست تمام جبران تاخیرها (برای ادمین)
+     */
+    public function getAllDelayCompensations()
+    {
+        if (auth()->user()->role !== 'admin' && auth()->user()->role !== 'supervisor') {
+            return response()->json(['status' => 'error', 'message' => 'شما دسترسی لازم را ندارید.'], 403);
+        }
+
+        try {
+            $compensations = DB::table('next_delay_compensations')
+                ->join('users', 'next_delay_compensations.user_id', '=', 'users.id')
+                ->leftJoin('next_attendance_clocks', 'next_delay_compensations.attendance_clock_id', '=', 'next_attendance_clocks.id')
+                ->select(
+                    'next_delay_compensations.*',
+                    'users.name as user_name',
+                    'next_attendance_clocks.created_at as attendance_date'
+                )
+                ->orderBy('next_delay_compensations.date', 'desc')
+                ->get();
+
+            return response()->json(['status' => 'success', 'data' => $compensations]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    public function updateConsultationSession(Request $request, $id)
+    {
+        try {
+            $validated = $request->validate([
+                'lead_id' => 'nullable|exists:leads,id',
+                'agent_id' => 'nullable|exists:agents,id',
+                'session_date' => 'nullable|date',
+                'session_type' => 'nullable|in:initial,followup,final',
+                'status' => 'nullable|in:scheduled,completed,cancelled',
+                'notes' => 'nullable|string',
+                'first_name' => 'nullable|string',
+                'last_name' => 'nullable|string',
+                'age' => 'nullable|integer',
+                'marital_status' => 'nullable|in:single,married',
+                'military_status' => 'nullable|in:exempt,served,serving,not_required',
+                'last_degree' => 'nullable|in:diploma,associate,bachelor,master,phd',
+                'gpa' => 'nullable|numeric',
+                'graduation_year' => 'nullable|integer',
+                'field_of_study' => 'nullable|string',
+                'language_degree' => 'nullable|in:ielts,toefl,duolingo,pte',
+                'language_score' => 'nullable|string',
+                'financial_capability' => 'nullable|integer',
+                'has_job_offer' => 'nullable|boolean',
+                'target_country' => 'nullable|string',
+                'visa_type' => 'nullable|in:study,work,investment,tourist',
+                'spouse_name' => 'nullable|string',
+                'spouse_phone' => 'nullable|string',
+            ]);
+
+            $updateData = array_filter($validated, function ($value) {
+                return $value !== null;
+            });
+
+            $updateData['updated_at'] = now();
+
+            DB::table('consultation_sessions')->where('id', $id)->update($updateData);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'جلسه مشاوره با موفقیت ویرایش شد'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    public function destroyConsultationSession($id)
+    {
+        try {
+            DB::table('consultation_sessions')->where('id', $id)->delete();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'جلسه مشاوره با موفقیت حذف شد'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 🔐 دریافت لیست کارشناسان با MAC Address (برای مدیریت ادمین)
+     */
+    public function getAgentsWithMacAddresses()
+    {
+        if (auth()->user()->role !== 'admin' && auth()->user()->role !== 'supervisor') {
+            return response()->json(['status' => 'error', 'message' => 'شما دسترسی لازم را ندارید.'], 403);
+        }
+
+        try {
+            $agents = DB::table('agents')
+                ->join('users', 'agents.email', '=', 'users.email')
+                ->select(
+                    'agents.id',
+                    'agents.name',
+                    'agents.email',
+                    'agents.mac_address_1',
+                    'agents.mac_address_2',
+                    'users.id as user_id',
+                    'users.role'
+                )
+                ->orderBy('agents.name')
+                ->get();
+
+            return response()->json(['status' => 'success', 'data' => $agents]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 🔐 به‌روزرسانی MAC Address کارشناس (برای مدیریت ادمین)
+     */
+    public function updateAgentMacAddresses(Request $request, $agentId)
+    {
+        if (auth()->user()->role !== 'admin' && auth()->user()->role !== 'supervisor') {
+            return response()->json(['status' => 'error', 'message' => 'شما دسترسی لازم را ندارید.'], 403);
+        }
+
+        $request->validate([
+            'mac_address_1' => 'nullable|string|regex:/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/',
+            'mac_address_2' => 'nullable|string|regex:/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/',
+        ]);
+
+        try {
+            DB::table('agents')->where('id', $agentId)->update([
+                'mac_address_1' => $request->mac_address_1,
+                'mac_address_2' => $request->mac_address_2,
+                'updated_at' => now(),
+            ]);
+
+            return response()->json(['status' => 'success', 'message' => 'MAC Address با موفقیت به‌روزرسانی شد.']);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 دریافت ساعات کاری ماهانه کارشناس (برای پنل خودش)
+     */
+    public function getMonthlyWorkingHours(Request $request)
+    {
+        try {
+            $userId = $request->user_id ?? auth()->id();
+            $year = $request->year ?? date('Y');
+            $month = $request->month ?? date('m');
+
+            // دریافت شیفت کاری کاربر
+            $userShift = DB::table('next_shifts')
+                ->join('user_shift_assignments', 'next_shifts.id', '=', 'user_shift_assignments.shift_id')
+                ->where('user_shift_assignments.user_id', $userId)
+                ->where('user_shift_assignments.is_active', true)
+                ->first();
+
+            if (!$userShift) {
+                return response()->json(['status' => 'error', 'message' => 'شیفت کاری برای این کارشناس تعریف نشده است.'], 404);
+            }
+
+            // محاسبه ساعات کاری مورد انتظار برای ماه
+            $expectedDailyHours = $this->calculateDailyHours($userShift->shift_start, $userShift->shift_end);
+            $workingDays = $this->getWorkingDaysInMonth($year, $month);
+            $expectedMonthlyHours = $expectedDailyHours * $workingDays;
+
+            // دریافت ساعات کاری واقعی از جدول حضور و غیاب
+            $actualHours = DB::table('next_attendance_clocks')
+                ->where('user_id', $userId)
+                ->whereYear('created_at', $year)
+                ->whereMonth('created_at', $month)
+                ->whereNotNull('clock_out_timestamp')
+                ->selectRaw('SUM(duration_seconds / 3600) as total_hours')
+                ->value('total_hours') ?? 0;
+
+            // دریافت جبران تاخیرها
+            $delayCompensations = DB::table('next_delay_compensations')
+                ->where('user_id', $userId)
+                ->whereYear('date', $year)
+                ->whereMonth('date', $month)
+                ->selectRaw('SUM(compensation_minutes_required) as total_required, SUM(compensation_minutes_completed) as total_completed')
+                ->first();
+
+            $requiredCompensation = $delayCompensations->total_required ?? 0;
+            $completedCompensation = $delayCompensations->total_completed ?? 0;
+
+            // محاسبه ساعات کاری نهایی با در نظر گرفتن جبران تاخیر
+            $finalEffectiveHours = $actualHours + ($completedCompensation / 60);
+
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'year' => $year,
+                    'month' => $month,
+                    'shift' => [
+                        'name' => $userShift->name,
+                        'start' => $userShift->shift_start,
+                        'end' => $userShift->shift_end,
+                        'allowed_delay' => $userShift->allowed_delay_minutes ?? 0,
+                    ],
+                    'expected_monthly_hours' => round($expectedMonthlyHours, 2),
+                    'actual_hours' => round($actualHours, 2),
+                    'delay_compensation' => [
+                        'required_minutes' => $requiredCompensation,
+                        'completed_minutes' => $completedCompensation,
+                        'remaining_minutes' => max(0, $requiredCompensation - $completedCompensation),
+                    ],
+                    'final_effective_hours' => round($finalEffectiveHours, 2),
+                    'completion_percentage' => $expectedMonthlyHours > 0 
+                        ? round(($finalEffectiveHours / $expectedMonthlyHours) * 100, 2) 
+                        : 0,
+                    'daily_records' => $this->getDailyAttendanceRecords($userId, $year, $month),
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 📊 دریافت رکوردهای روزانه حضور و غیاب
+     */
+    private function getDailyAttendanceRecords($userId, $year, $month)
+    {
+        return DB::table('next_attendance_clocks')
+            ->where('user_id', $userId)
+            ->whereYear('created_at', $year)
+            ->whereMonth('created_at', $month)
+            ->leftJoin('next_delay_compensations', function($join) {
+                $join->on('next_attendance_clocks.id', '=', 'next_delay_compensations.attendance_clock_id');
+            })
+            ->select(
+                'next_attendance_clocks.id',
+                'next_attendance_clocks.created_at as date_shamsi',
+                DB::raw('FROM_UNIXTIME(next_attendance_clocks.clock_in_timestamp) as clock_in'),
+                DB::raw('FROM_UNIXTIME(next_attendance_clocks.clock_out_timestamp) as clock_out'),
+                'next_attendance_clocks.created_at',
+                'next_delay_compensations.delay_minutes',
+                'next_delay_compensations.compensation_minutes_required',
+                'next_delay_compensations.compensation_minutes_completed',
+                DB::raw('next_attendance_clocks.duration_seconds / 3600 as worked_hours')
+            )
+            ->orderBy('next_attendance_clocks.created_at')
+            ->get();
+    }
+
+    /**
+     * 📊 محاسبه ساعات کاری روزانه بر اساس شیفت
+     */
+    private function calculateDailyHours($startTime, $endTime)
+    {
+        $start = strtotime($startTime);
+        $end = strtotime($endTime);
+        return ($end - $start) / 3600; // تبدیل به ساعت
+    }
+
+    /**
+     * 📊 محاسبه روزهای کاری در ماه (بدون تعطیلات)
+     */
+    private function getWorkingDaysInMonth($year, $month)
+    {
+        $totalDays = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+        $workingDays = 0;
+
+        for ($day = 1; $day <= $totalDays; $day++) {
+            $date = mktime(0, 0, 0, $month, $day, $year);
+            $dayOfWeek = date('N', $date); // 1 = Monday, 7 = Sunday
+
+            // جمعه (6) و شنبه (7) تعطیل است
+            if ($dayOfWeek < 6) {
+                $workingDays++;
+            }
+        }
+
+        // کسر تعطیلات رسمی
+        $holidaysCount = DB::table('next_holidays')
+            ->whereYear('holiday_date', $year)
+            ->whereMonth('holiday_date', $month)
+            ->count();
+
+        return max(0, $workingDays - $holidaysCount);
+    }
 }

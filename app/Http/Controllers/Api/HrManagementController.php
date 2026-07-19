@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 
 class HrManagementController extends Controller
 {
-   /**
+    /**
      * 🚀 ثبت لایو کلک ورود و خروج با لایه‌های کنترلی و گارد ضد اسپم و فراموشی
      */
     public function toggleClock(Request $request)
@@ -21,6 +21,33 @@ class HrManagementController extends Controller
             
             $maxShiftSeconds = 12 * 3600; // سقف مجاز باز ماندن تایمر (۱۲ ساعت)
             $antiSpamSeconds = 30;        // حداقل فاصله مجاز بین دو کلیک (۳۰ ثانیه)
+
+            // 🎯 گارد MAC Address: بررسی آدرس MAC دستگاه
+            $clientMac = $request->header('X-Client-MAC');
+            if (!$clientMac) {
+                return response()->json([
+                    'status' => 'error', 
+                    'message' => '🛑 آدرس MAC دستگاه ارسال نشده است.'
+                ], 400);
+            }
+
+            // بررسی تطابق MAC با یکی از دو آدرس مجاز کاربر
+            $userMac1 = $user->mac_address_1;
+            $userMac2 = $user->mac_address_2;
+            
+            if (!$userMac1 && !$userMac2) {
+                return response()->json([
+                    'status' => 'error', 
+                    'message' => '🛑 آدرس MAC برای حساب کاربری شما ثبت نشده است. لطفاً با ادمین تماس بگیرید.'
+                ], 403);
+            }
+
+            if ($userMac1 && $clientMac !== $userMac1 && $clientMac !== $userMac2) {
+                return response()->json([
+                    'status' => 'error', 
+                    'message' => '🛑 دستگاه شما مجاز به ثبت تردد نیست.'
+                ], 403);
+            }
 
             // استفاده از Transaction برای جلوگیری از ثبت همزمان رکوردهای تکراری در صدم ثانیه
             return DB::transaction(function () use ($user, $currentTimestamp, $maxShiftSeconds, $antiSpamSeconds) {
@@ -68,12 +95,16 @@ class HrManagementController extends Controller
                 // ۴. منطق اصلی ثبت ورود یا خروج
                 if (!$activeClock) {
                     // ثبت ورود جدید
-                    DB::table('next_attendance_clocks')->insert([
+                    $clockId = DB::table('next_attendance_clocks')->insertGetId([
                         'user_id' => $user->id,
                         'clock_in_timestamp' => $currentTimestamp,
                         'created_at' => now(),
                         'updated_at' => now()
                     ]);
+
+                    // 🎯 پردازش جبران تاخیر در صورت وجود تاخیر در ورود
+                    $this->processDelayCompensation($clockId, $user->id, $currentTimestamp);
+
                     return response()->json([
                         'status' => 'success', 
                         'is_clocked_in' => true, 
@@ -101,6 +132,110 @@ class HrManagementController extends Controller
         } catch (\Exception $e) {
             return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * 🎯 پردازش جبران تاخیر برای یک رکورد تردد
+     */
+    private function processDelayCompensation($clockId, $userId, $clockInTimestamp)
+    {
+        try {
+            // بررسی وجود شیفت کاری برای کاربر
+            $shift = DB::table('next_shifts')->first();
+            if (!$shift) return;
+
+            // محاسبه زمان شروع مجاز بر اساس شیفت
+            $shiftStart = $this->parseTimeToTimestamp($shift->shift_start, $clockInTimestamp);
+            $allowedDelay = $shift->allowed_delay_minutes * 60; // تبدیل به ثانیه
+
+            // محاسبه تاخیر
+            $delaySeconds = $clockInTimestamp - ($shiftStart + $allowedDelay);
+            
+            if ($delaySeconds <= 0) return; // بدون تاخیر
+
+            $delayMinutes = ceil($delaySeconds / 60);
+
+            // بررسی تعطیلات
+            $todayShamsi = \Illuminate\Support\Carbon::createFromTimestamp($clockInTimestamp)->format('Y/m/d');
+            $isHoliday = DB::table('next_holidays')
+                ->where('holiday_date_shamsi', $todayShamsi)
+                ->exists();
+
+            if ($isHoliday) return;
+
+            // بررسی مرخصی‌های ثبت شده
+            $hasLeave = DB::table('next_leaves_requests')
+                ->where('user_id', $userId)
+                ->where('status', 'approved')
+                ->where('start_timestamp', '<=', $clockInTimestamp)
+                ->where('end_timestamp', '>=', $clockInTimestamp)
+                ->exists();
+
+            if ($hasLeave) return;
+
+            // یافتن قانون مناسب
+            $rule = DB::table('next_delay_compensation_rules')
+                ->where('is_active', true)
+                ->where('delay_start_minutes', '<=', $delayMinutes)
+                ->where('delay_end_minutes', '>', $delayMinutes)
+                ->first();
+
+            if (!$rule) return;
+
+            // ثبت جبران تاخیر
+            $compensationId = DB::table('next_delay_compensations')->insertGetId([
+                'user_id' => $userId,
+                'attendance_clock_id' => $clockId,
+                'date' => $todayShamsi,
+                'delay_minutes' => $delayMinutes,
+                'compensation_minutes_required' => $rule->compensation_minutes,
+                'compensation_minutes_completed' => 0,
+                'auto_leave_recorded' => false,
+                'notes' => null,
+                'created_at' => now(),
+                'updated_at' => now()
+            ]);
+
+            // ثبت مرخصی خودکار در صورت نیاز
+            if ($rule->auto_leave_hours && $rule->auto_leave_duration_hours > 0) {
+                $leaveStart = $clockInTimestamp;
+                $leaveEnd = $clockInTimestamp + ($rule->auto_leave_duration_hours * 3600);
+                
+                $leaveId = DB::table('next_leaves_requests')->insertGetId([
+                    'user_id' => $userId,
+                    'department_id' => DB::table('users')->where('id', $userId)->value('department_id'),
+                    'leave_type' => 'daily_vacation',
+                    'start_timestamp' => $leaveStart,
+                    'end_timestamp' => $leaveEnd,
+                    'reason' => 'مرخصی خودکار ناشی از تاخیر',
+                    'status' => 'approved',
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
+
+                DB::table('next_delay_compensations')
+                    ->where('id', $compensationId)
+                    ->update([
+                        'auto_leave_recorded' => true,
+                        'auto_leave_request_id' => $leaveId,
+                        'updated_at' => now()
+                    ]);
+            }
+
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Error processing delay compensation: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * تبدیل زمان (HH:MM) به timestamp برای همان روز
+     */
+    private function parseTimeToTimestamp($timeString, $referenceTimestamp)
+    {
+        $date = \Illuminate\Support\Carbon::createFromTimestamp($referenceTimestamp);
+        list($hours, $minutes) = explode(':', $timeString);
+        $date->setHour((int)$hours)->setMinute((int)$minutes)->setSecond(0);
+        return $date->timestamp;
     }
 
     public function getClockStatus(Request $request)
@@ -178,6 +313,15 @@ class HrManagementController extends Controller
                 $finalDeptId = DB::table('users')->where('id', $finalUserId)->value('department_id');
             }
 
+            // 🎯 اعتبارسنجی محدودیت مرخصی ماهانه (8.5% قانون)
+            $leaveType = $request->leave_type;
+            if (in_array($leaveType, ['daily_vacation', 'hourly_pass'])) {
+                $validation = $this->validateLeaveLimit($finalUserId, $leaveType, $request->start_timestamp, $request->end_timestamp);
+                if (!$validation['valid']) {
+                    return response()->json(['status' => 'error', 'message' => $validation['message']], 400);
+                }
+            }
+
             DB::table('next_leaves_requests')->insert([
                 'user_id' => $finalUserId,
                 'department_id' => $finalDeptId,
@@ -193,6 +337,72 @@ class HrManagementController extends Controller
             return response()->json(['status' => 'success', 'message' => '✓ رکورد اداری/مرخصی با موفقیت در دیتابیس هسته پلمب شد.']);
         } catch (\Exception $e) {
             return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 🎯 اعتبارسنجی محدودیت مرخصی ماهانه (8.5% قانون)
+     */
+    private function validateLeaveLimit($userId, $leaveType, $startTimestamp, $endTimestamp)
+    {
+        try {
+            // محاسبه ماه جاری
+            $currentDate = \Illuminate\Support\Carbon::createFromTimestamp($startTimestamp);
+            $monthStart = $currentDate->copy()->startOfMonth()->timestamp;
+            $monthEnd = $currentDate->copy()->endOfMonth()->timestamp;
+
+            // محاسبه ساعات کاری مجاز ماهانه (8.5% از کل ساعات کاری ماه)
+            // فرض: 22 روز کاری در ماه، 8.5 ساعت در روز = 187 ساعت کاری ماهانه
+            $monthlyWorkingHours = 22 * 8.5; // 187 ساعت
+            $allowedLeaveHours = $monthlyWorkingHours * 0.085; // 8.5% = ~15.9 ساعت
+
+            // محاسبه مرخصی‌های استفاده شده در ماه جاری
+            $usedLeaveHours = 0;
+            $usedDailyLeaves = 0;
+
+            $monthlyLeaves = DB::table('next_leaves_requests')
+                ->where('user_id', $userId)
+                ->where('status', 'approved')
+                ->whereBetween('start_timestamp', [$monthStart, $monthEnd])
+                ->get();
+
+            foreach ($monthlyLeaves as $leave) {
+                if ($leave->leave_type === 'daily_vacation') {
+                    $usedDailyLeaves++;
+                } elseif ($leave->leave_type === 'hourly_pass') {
+                    $durationHours = ($leave->end_timestamp - $leave->start_timestamp) / 3600;
+                    $usedLeaveHours += $durationHours;
+                }
+            }
+
+            // محاسبه درخواست فعلی
+            $requestedHours = 0;
+            if ($leaveType === 'daily_vacation') {
+                $requestedDaily = 1;
+                // محاسبه تعداد روزهای درخواست
+                $requestedDays = ceil(($endTimestamp - $startTimestamp) / (24 * 3600));
+                $requestedDaily = $requestedDays;
+                
+                // هر روز مرخصی = 8.5 ساعت از سهمیه
+                $requestedHours = $requestedDaily * 8.5;
+            } elseif ($leaveType === 'hourly_pass') {
+                $requestedHours = ($endTimestamp - $startTimestamp) / 3600;
+            }
+
+            // اعتبارسنجی
+            $totalAfterRequest = $usedLeaveHours + $requestedHours;
+            
+            if ($totalAfterRequest > $allowedLeaveHours) {
+                return [
+                    'valid' => false,
+                    'message' => "🛑 سقف مرخصی ماهانه شما (" . number_format($allowedLeaveHours, 1) . " ساعت) پر شده است. استفاده شده: " . number_format($usedLeaveHours, 1) . " ساعت، درخواست: " . number_format($requestedHours, 1) . " ساعت."
+                ];
+            }
+
+            return ['valid' => true];
+
+        } catch (\Exception $e) {
+            return ['valid' => false, 'message' => 'خطا در اعتبارسنجی مرخصی: ' . $e->getMessage()];
         }
     }
 
@@ -222,27 +432,48 @@ class HrManagementController extends Controller
             }
             $leaves = $leavesQuery->orderBy('next_leaves_requests.id', 'desc')->get();
 
-            // ۳. 🎯 موتور محاسباتی مانده مرخصی استحقاقی (Leave Balance)
-            // فرض می‌کنیم سقف مرخصی استحقاقی مجاز سالانه ۲۶ روز است
-            $allowedLeaveDays = 26; 
-            
-            // محاسبه تعداد روزهای مرخصی تایید شده کاربر فعلی
-            $usedLeaveDays = DB::table('next_leaves_requests')
-                ->where('user_id', $user->id)
-                ->where('leave_type', 'daily_vacation')
-                ->where('status', 'approved')
-                ->count(); // هر رکورد تایید شده را ۱ روز فرض میکنیم (میتوان بر پایه تفاضل تایم‌استمپ هم دقیق‌تر کرد)
+            // ۳. 🎯 موتور محاسباتی مانده مرخصی ماهانه (8.5% قانون)
+            $currentDate = \Illuminate\Support\Carbon::now();
+            $monthStart = $currentDate->copy()->startOfMonth()->timestamp;
+            $monthEnd = $currentDate->copy()->endOfMonth()->timestamp;
 
-            $remainingLeaveDays = $allowedLeaveDays - $usedLeaveDays;
+            // محاسبه ساعات کاری مجاز ماهانه (8.5% از کل ساعات کاری ماه)
+            $monthlyWorkingHours = 22 * 8.5; // 187 ساعت
+            $allowedLeaveHours = $monthlyWorkingHours * 0.085; // 8.5% = ~15.9 ساعت
+
+            // محاسبه مرخصی‌های استفاده شده در ماه جاری
+            $usedLeaveHours = 0;
+            $usedDailyLeaves = 0;
+
+            $monthlyLeaves = DB::table('next_leaves_requests')
+                ->where('user_id', $user->id)
+                ->where('status', 'approved')
+                ->whereBetween('start_timestamp', [$monthStart, $monthEnd])
+                ->get();
+
+            foreach ($monthlyLeaves as $leave) {
+                if ($leave->leave_type === 'daily_vacation') {
+                    $usedDailyLeaves++;
+                    $usedLeaveHours += 8.5; // هر روز = 8.5 ساعت
+                } elseif ($leave->leave_type === 'hourly_pass') {
+                    $durationHours = ($leave->end_timestamp - $leave->start_timestamp) / 3600;
+                    $usedLeaveHours += $durationHours;
+                }
+            }
+
+            $remainingLeaveHours = max(0, $allowedLeaveHours - $usedLeaveHours);
 
             return response()->json([
                 'status' => 'success',
                 'clocks' => $clocks,
                 'leaves' => $leaves,
                 'leave_balance' => [
-                    'total_allowed' => $allowedLeaveDays,
-                    'total_used' => $usedLeaveDays,
-                    'remaining' => $remainingLeaveDays > 0 ? $remainingLeaveDays : 0
+                    'total_allowed_hours' => round($allowedLeaveHours, 1),
+                    'total_used_hours' => round($usedLeaveHours, 1),
+                    'remaining_hours' => round($remainingLeaveHours, 1),
+                    'used_daily_leaves' => $usedDailyLeaves,
+                    'monthly_working_hours' => $monthlyWorkingHours,
+                    'calculation_rule' => '8.5% monthly working hours'
                 ]
             ]);
         } catch (\Exception $e) {

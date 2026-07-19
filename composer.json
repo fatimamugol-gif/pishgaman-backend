@@ -92,5 +92,9 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "repositories": [{
+        "type": "vcs",
+    	"url": "https://github.com/KwikKoders/zkteco-sdk"
+    }]
 }

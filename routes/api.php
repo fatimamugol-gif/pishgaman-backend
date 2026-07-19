@@ -20,12 +20,41 @@ use App\Http\Controllers\CallLogController;
 use App\Http\Controllers\Api\HrManagementController;
 use App\Http\Controllers\Api\PayrollController;
 use Illuminate\Support\Facades\Artisan;
+use App\Services\NotificationService;
 /*
 |--------------------------------------------------------------------------
 | ۱. روت‌های عمومی (Public Routes)
 |--------------------------------------------------------------------------
 */
 
+Route::get('/next/test-notification', function () {
+    return redirect()->to('/api/next/test-universal-hub');
+});
+Route::get('/next/test-universal-hub', function () {
+    $notifier = new NotificationService();
+
+    $targets = [
+        'phone'            => '09100816547',
+        'email'            => 'm.r.shahbazi1991@gmail.com',
+        'telegram_chat_id' => '987654321',
+        'fcm_token'        => 'FCM_DEVICE_TOKEN_FROM_BROWSER', 
+    ];
+
+    $payload = [
+        'title'        => '🚀 پلمب نهایی کورتکس Universal Notification',
+        'body'         => 'مهندس جان، تمامی مجاری ارتباطی سیستم (SMS, Email, Telegram, WhatsApp, FCM) با موفقیت به هسته متمرکز متصل شدند.',
+        'click_action' => '/dashboard/leaves'
+    ];
+
+    // شلیک اتمیک و همزمان به ۵ کانال ارتباطی لایو سازمان
+    $status = $notifier->send($targets, $payload, ['sms', 'email', 'telegram', 'whatsapp', 'firebase']);
+
+    return response()->json([
+        'status'  => 'success',
+        'message' => '🛰️ پکت جامع به تمام وب‌سرویس‌های جهانی مخابراتی و گوگل شلیک شد.',
+        'results' => $status
+    ]);
+});
 Route::post('/ok-solar/knowledge/ask', function (Request $request, OkSolarKnowledgeService $solarService) {
     $request->validate([
         'question' => 'required|string',
@@ -95,6 +124,11 @@ Route::get('/system/clear-everything', function () {
 // ورود متمرکز کاربران و کارشناسان
 Route::post('/next/auth/login', [NextCoreController::class, 'login'])->name('login');
 
+Route::post('/next/session-report/trigger', [NextDashboardController::class, 'triggerSessionDeadline']);
+Route::post('/next/session-report/submit/{id}', [NextDashboardController::class, 'submitSessionReport']);
+
+Route::get('/next/session-reports/archive', [NextDashboardController::class, 'getAllSessionReports']);
+
 // وب‌هوک‌های ثالث مخابرات و شبکه‌های اجتماعی
 Route::post('/v1/webhook/telegram', [TelegramWebhookController::class, 'handle']);
 Route::post('/v1/webhook/instagram', [InstagramWebhookController::class, 'handle']);
@@ -108,6 +142,8 @@ Route::post('/perfex-webhook-test', [WebhookTestController::class, 'handleTestWe
 Route::get('/next/departments', [NextCoreController::class, 'getDepartments']);
 Route::get('/next/agents/voip-status', [NextDashboardController::class, 'getAgentsVoipStatus']);
 Route::get('/next/supervisor/reports', [NextDashboardController::class, 'getSupervisorReports']);
+Route::get('/next/senior-consultants', [NextDashboardController::class, 'getSeniorConsultants']);
+Route::get('/next/initial-consultants', [NextDashboardController::class, 'getInitialConsultants']);
 
 /*
 |--------------------------------------------------------------------------
@@ -142,6 +178,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/next/hr/admin/all-attendance', [HrManagementController::class, 'getAllStaffAttendanceLogs']);
     Route::post('/next/hr/admin/update-attendance', [NextCoreController::class, 'updateManualAttendance']);
 
+    // 🎯 سیستم جبران تاخیر (Delay Compensation System)
+    Route::get('/next/delay-compensation/rules', [NextCoreController::class, 'getDelayCompensationRules']);
+    Route::post('/next/delay-compensation/rules', [NextCoreController::class, 'storeDelayCompensationRule']);
+    // به این:
+    Route::put('/next/delay-compensation/rules/{id}', [NextCoreController::class, 'updateDelayCompensationRule']);
+    // و همچنین برای پشتیبانی از PATCH (اختیاری)
+    Route::patch('/next/delay-compensation/rules/{id}', [NextCoreController::class, 'updateDelayCompensationRule']);    
+    Route::delete('/next/delay-compensation/rules/{id}', [NextCoreController::class, 'destroyDelayCompensationRule']);
+    Route::post('/next/delay-compensation/process', [NextCoreController::class, 'processAttendanceDelay']);
+    Route::post('/next/delay-compensation/record', [NextCoreController::class, 'recordCompensationCompleted']);
+    Route::get('/next/delay-compensation/user', [NextCoreController::class, 'getUserDelayCompensations']);
+    Route::get('/next/delay-compensation/all', [NextCoreController::class, 'getAllDelayCompensations']);
+
     Route::get('/next/payrolls', [PayrollController::class, 'getPayrolls']);
     Route::post('/next/payrolls', [PayrollController::class, 'storeOrUpdate']);
     
@@ -170,6 +219,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/next/leads/store-event/{id}', [NextDashboardController::class, 'storeLeadEvent']);
     Route::get('/next/dashboard/senior-consultants', [NextDashboardController::class, 'getSeniorConsultants']);
     Route::post('/next/leads/submit-session-report/{taskId}', [NextDashboardController::class, 'submitSessionReport']);
+    Route::post('next/leads/schedule-senior-session/{id}', [NextDashboardController::class, 'scheduleSeniorConsultation']);
 
     Route::post('/next/leads/update-persona/{id}', [NextDashboardController::class, 'updateLeadPersona']);
     Route::post('/next/leads/store-summary/{id}', [NextDashboardController::class, 'storeCallSummary']);
@@ -182,12 +232,25 @@ Route::middleware('auth:sanctum')->group(function () {
     // مدیریت کاربران و پرمیشن‌ها (بازگشت دقیق نام متدهای بومی شما جهت رفع ارور ۵۰۰)
     Route::get('/next/users', [NextCoreController::class, 'getUsersList']);
     Route::post('/next/users/store', [NextCoreController::class, 'storeUser']);
-    // Route::put('/next/users/update/{id}', [NextCoreController::class, 'updateUserComplete']); 
+    // Route::put('/next/users/update/{id}', [NextCoreController::class, 'updateUserComplete']);
     // 🎯 تغییر یافت و پلمب شد: تبدیل متد از PUT به POST جهت همگام‌سازی با ساختار فرانت‌آند Next.js
     Route::post('/next/users/update/{id}', [NextCoreController::class, 'updateUserComplete']);
-    Route::delete('/next/users/delete/{id}', [NextCoreController::class, 'destroyUser']); 
+    Route::delete('/next/users/delete/{id}', [NextCoreController::class, 'destroyUser']);
     Route::put('/next/users/role/{id}', [NextCoreController::class, 'updateUserRole']);
     Route::post('/next/departments/store', [NextCoreController::class, 'storeOrUpdateDepartment']);
+
+    // 🔐 مدیریت MAC Address کارشناسان (ادمین/سوپروایزر)
+    Route::get('/next/agents/mac-addresses', [NextCoreController::class, 'getAgentsWithMacAddresses']);
+    Route::post('/next/agents/mac-addresses/{agentId}', [NextCoreController::class, 'updateAgentMacAddresses']);
+
+    // 📊 گزارش ساعات کاری ماهانه کارشناس
+    Route::get('/next/hr/monthly-working-hours', [NextCoreController::class, 'getMonthlyWorkingHours']);
+
+    // مدیریت جلسات مشاوره اولیه (Consultation Sessions)
+    Route::get('/next/consultation-sessions', [NextCoreController::class, 'getConsultationSessions']);
+    Route::post('/next/consultation-sessions', [NextCoreController::class, 'storeConsultationSession']);
+    Route::post('/next/consultation-sessions/{id}', [NextCoreController::class, 'updateConsultationSession']);
+    Route::delete('/next/consultation-sessions/{id}', [NextCoreController::class, 'destroyConsultationSession']);
 
     // 👑 هاب مدیریت دپارتمانی کارشناسان (StaffManagerController)
     Route::get('/staff/tickets', [StaffManagerController::class, 'getAllClientTickets']);
@@ -239,6 +302,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/next/reminders/check-now', [NextCoreController::class, 'checkNow']);
     Route::post('/next/reminders/{id}/dismiss', [NextCoreController::class, 'dismissReminder']);
     Route::post('/next/reminders/status/{id}', [NextCoreController::class, 'updateReminderStatus']);
+
+    // 💬 سیستم چت آنلاین بین کارشناسان (Staff Chat)
+    Route::prefix('staff/chat')->controller(\App\Http\Controllers\Api\StaffChatController::class)->group(function () {
+        Route::get('/conversations', 'getConversations');        // لیست مکالمات
+        Route::get('/messages/{otherUserId}', 'getMessages');    // پیام‌های یک مکالمه
+        Route::post('/send', 'sendMessage');                     // ارسال پیام جدید
+        Route::post('/read/{messageId}', 'markAsRead');          // علامت‌گذاری به عنوان خوانده شده
+    });
 });
 
 /*

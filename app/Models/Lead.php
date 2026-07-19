@@ -62,6 +62,14 @@ class Lead extends Model
     }
 
     /**
+     * 📝 ارتباط با جلسات مشاوره
+     */
+    public function consultationSessions()
+    {
+        return $this->hasMany(ConsultationSession::class);
+    }
+
+    /**
      * ⚡ بوت‌متد اختصاصی برای مدیریت زنده ظرفیت کارشناسان
      */
     protected static function booted()
