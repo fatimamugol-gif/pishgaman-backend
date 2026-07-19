@@ -226,35 +226,39 @@ class ClientPortalController extends Controller
 
      * 📋 ۱. واکشی اختصاصی وظایف متقاضی (تزریق فیلد کلیدی global_doc_id جهت تفکیک مودال هوشمند فرانت)
      */
-    public function getMyTasks()
-    {
-        $lead = $this->getAuthenticatedClientLead();
-        if (!$lead) return response()->json(['status' => 'error', 'message' => 'پرونده یافت نشد'], 404);
+   public function getMyTasks()
+{
+    $lead = $this->getAuthenticatedClientLead();
+    if (!$lead) return response()->json(['status' => 'error', 'message' => 'پرونده یافت نشد'], 404);
 
-        // 🧠 تفکیک کارهای داخلی کارشناس از کارهای متقاضی به همراه فیلد متصل به اسناد عمومی
-        $tasks = DB::table('next_tasks')
-            ->where('lead_id', $lead->id)
-            ->where('target_audience', 'client') 
-            ->orderBy('id', 'desc')
-            ->get()
-            ->map(function($task) {
-                return [
-                    'id' => $task->id,
-                    'global_doc_id' => $task->global_doc_id ?? null, // 🎯 فیکس نهایی: ارسال فیلد به فرانت کلاینت
-                    'task_title' => $task->task_title,
-                    'description' => $task->description ?? '',
-                    'due_date_shamsi' => $task->due_date_shamsi ?? '---',
-                    'status' => $task->status, // pending, done
-                    'priority' => $task->priority,
-                    'start_date_shamsi' => $task->start_date_shamsi ?? '',
-                    'has_reminder' => $task->has_reminder ?? 0,
-                    'client_file_url' => $task->client_file_path ? asset('storage/' . $task->client_file_path) : null,
-                    'created_at' => \Carbon\Carbon::parse($task->created_at)->format('Y/m/d')
-                ];
-            });
+    $tasks = DB::table('next_tasks')
+        ->where('lead_id', $lead->id)
+        ->where('target_audience', 'client') 
+        ->orderBy('id', 'desc')
+        ->get()
+        ->map(function($task) {
+            return [
+                'id' => $task->id,
+                'global_doc_id' => $task->global_doc_id ?? null,
+                'task_title' => $task->task_title,
+                'description' => $task->description ?? '',
+                'due_date_shamsi' => $task->due_date_shamsi ?? '---',
+                
+                // 🎯 پچ جدید: ارسال تایم‌استمپ استاندارد میلادی برای کامپوننت‌های فرانت
+                'due_date_iso' => $task->due_date_at ? \Carbon\Carbon::parse($task->due_date_at)->toIso8601String() : null,
+                'start_date_iso' => $task->start_date_at ? \Carbon\Carbon::parse($task->start_date_at)->toIso8601String() : null,
+                'reminder_iso' => $task->reminder_at ? \Carbon\Carbon::parse($task->reminder_at)->toIso8601String() : null,
+                
+                'status' => $task->status, 
+                'priority' => $task->priority,
+                'has_reminder' => $task->has_reminder ?? 0,
+                'client_file_url' => $task->client_file_path ? asset('storage/' . $task->client_file_path) : null,
+                'created_at' => \Carbon\Carbon::parse($task->created_at)->format('Y/m/d')
+            ];
+        });
 
-        return response()->json(['status' => 'success', 'data' => $tasks]);
-    }
+    return response()->json(['status' => 'success', 'data' => $tasks]);
+}
 
 
 
@@ -778,28 +782,27 @@ public function requestOnlinePayment(Request $request, $invoiceId)
      * 🔏 تایید و اتمام تسک توسط خود کلاینت جهت باز شدن قفل سند عمومی (رفع خطای ۴۰۴ کلاینت)
      */
     public function completeTaskByClient($taskId) 
-    {
-        try {
-            // 🎯 استفاده از متد کمکی شما برای مچ شدن دقیق بر روی لید پرونده به جای آیدی یوزر
-            $lead = $this->getAuthenticatedClientLead();
-            if (!$lead) {
-                return response()->json(['status' => 'error', 'message' => 'پرونده یافت نشد'], 404);
-            }
-
-            DB::table('next_tasks')
-                ->where('id', $taskId)
-                ->where('lead_id', $lead->id) // مچ شدن بر روی آیدی پرونده واقعی کلاینت
-                ->update([
-                    'status' => 'done',
-                    'updated_at' => now()
-                ]);
-
-            return response()->json(['status' => 'success', 'message' => '✓ اقدام با موفقیت تایید و تکمیل شد.']);
-        } catch (\Exception $e) {
-            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+{
+    try {
+        $lead = $this->getAuthenticatedClientLead();
+        if (!$lead) {
+            return response()->json(['status' => 'error', 'message' => 'پرونده یافت نشد'], 404);
         }
-    }
 
+        DB::table('next_tasks')
+            ->where('id', $taskId)
+            ->where('lead_id', $lead->id)
+            ->update([
+                'status' => 'done',
+                'completed_at' => now(), // 🎯 پلمب خودکار زمان اتمام تسک کلاینت
+                'updated_at' => now()
+            ]);
+
+        return response()->json(['status' => 'success', 'message' => '✓ اقدام با موفقیت تایید و تکمیل شد.']);
+    } catch (\Exception $e) {
+        return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+    }
+}
 
 
     /**

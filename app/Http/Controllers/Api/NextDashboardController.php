@@ -1091,13 +1091,16 @@ public function getAllSessionReports(Request $request)
         $isOriginated = $voipService->originateCall($voipExtension, $request->customer_phone);
 
         if ($isOriginated) {
-            $taskId = DB::table('next_tasks')->insertGetId([
-                'lead_id' => $request->lead_id ?? 1,
-                'task_title' => '📞 تماس خروجی سیستماتیک با متقاضی',
-                'status' => 'pending',
-                'due_date_shamsi' => class_exists('\Morilog\Jalali\Jalalian') ? \Morilog\Jalali\Jalalian::now()->format('Y/m/d') : now()->format('Y/m/d'),
-                'created_at' => now(), 'updated_at' => now()
-            ]);
+            // در انتهای متد clickToDial جایی که متد insert اجرا می‌شود:
+$taskId = DB::table('next_tasks')->insertGetId([
+    'lead_id' => $request->lead_id ?? 1,
+    'task_title' => '📞 تماس خروجی سیستماتیک با متقاضی',
+    'status' => 'pending',
+    'due_date_shamsi' => class_exists('\Morilog\Jalali\Jalalian') ? \Morilog\Jalali\Jalalian::now()->format('Y/m/d') : now()->format('Y/m/d'),
+    'due_date_at' => now(), // 🎯 پر کردن همزمان تایم‌استمپ میلادی برای تسک تماس فوری
+    'created_at' => now(), 
+    'updated_at' => now()
+]);
 
             return response()->json(['status' => 'success', 'message' => "سیگنال به داخلی {$voipExtension} ارسال شد.", 'task_id' => $taskId]);
         }
@@ -1217,14 +1220,26 @@ public function scheduleSeniorConsultation(Request $request, $leadId)
 
         $deadlineAt = now()->addHours(2); 
 
-        // ۲. آپدیت سطر لید (فعال‌سازی مشاوره عالی)
-        DB::table('leads')->where('id', $leadId)->update([
-            'session_date_shamsi' => $request->session_date_shamsi,
-            'next_call_date_shamsi' => $request->next_call_date_shamsi,
-            'senior_consultant_id' => $request->assigned_agent_id,
-            'is_excellent_lead' => 1, 
-            'updated_at' => now()
-        ]);
+        /// درون بلاک Transaction متد scheduleSeniorConsultation بخش ثبت تسک پیگیری:
+$sessionDateMiladi = null;
+if (class_exists('\Morilog\Jalali\Jalalian')) {
+    try {
+        $sessionDateMiladi = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $request->session_date_shamsi)->toCarbon();
+    } catch(\Exception $e) {}
+}
+
+DB::table('next_tasks')->insert([
+    'lead_id' => $leadId,
+    'task_title' => "📝 تکمیل صورتجلسه مشاور عالی ({$request->session_date_shamsi})",
+    'description' => "مود برگزاری: {$request->session_type} \n مشاور گرامی، لطفا صورتجلسه شماره {$reportId} را تا قبل از اتمام ددلاین ۲ ساعته ثبت کنید.",
+    'due_date_shamsi' => $request->session_date_shamsi,
+    'due_date_at' => $sessionDateMiladi ?? now()->addDay(), // 🎯 سینک دقیق تایم‌استمپ سررسید برای ناظر و مشاور
+    'status' => 'pending',
+    'priority' => 'high',
+    'target_audience' => 'staff',
+    'created_at' => now(),
+    'updated_at' => now()
+]);
 
         // 🎯 فیکس نهایی و هوشمند: استخراج آیدی واقعی دیتابیس بر اساس perfex_staff_id
         // چون لیدها با کد پرسنلیِ پرفکس ست شده‌اند، ابتدا رکورد هم‌تراز را در جدول agents پیدا می‌کنیم
