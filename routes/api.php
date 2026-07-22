@@ -177,6 +177,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/next/hr/admin/update-limit', [HrManagementController::class, 'updateCustomLeaveLimit']);
     Route::get('/next/hr/admin/all-attendance', [HrManagementController::class, 'getAllStaffAttendanceLogs']);
     Route::post('/next/hr/admin/update-attendance', [NextCoreController::class, 'updateManualAttendance']);
+    
+    // 🔄 سینک خودکار با دستگاه فاراتکنو
+    Route::post('/api/attendance/sync', [HrManagementController::class, 'syncWithFaratechnoDevice']);
+    Route::get('/api/attendance/last-sync', [HrManagementController::class, 'getLastSyncDate']);
 
     // 🎯 سیستم جبران تاخیر (Delay Compensation System)
     Route::get('/next/delay-compensation/rules', [NextCoreController::class, 'getDelayCompensationRules']);

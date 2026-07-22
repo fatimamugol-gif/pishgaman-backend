@@ -600,4 +600,193 @@ class HrManagementController extends Controller
             return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
         }
     }
+
+    /**
+     * 🔄 دریافت و ذخیره رکوردهای حضور و غیاب از دستگاه فاراتکنو
+     * این متد توسط برنامهara  f  فراخوانی می‌شود
+     */
+    public function syncWithFaratechnoDevice(Request $request)
+    {
+        // اعتبار سنجی کلید API
+        $apiKey = $request->header('X-API-KEY');
+        $validApiKey = env('FARATECHNO_API_KEY', 'ig1rwJMed7ynoZq1TFaou53MuBCs4++TaXu5juSkIfT6tNvWmTgnxyY7r0TYW7ff');
+        
+        if ($apiKey !== $validApiKey) {
+            return response()->json([
+                'status' => 'error',
+                'message' => '❌ کلید API معتبر نیست.'
+            ], 401);
+        }
+
+        // اعتبار سنجی داده‌ها
+        $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
+            'records' => 'required|array',
+            'records.*.code' => 'required|integer', // کد کاربر در دستگاه
+            'records.*.machine_no' => 'required|integer',
+            'records.*.verify_mode' => 'required|integer',
+            'records.*.att_type' => 'required|integer',
+            'records.*.occurred_at' => 'required|date_format:Y-m-d H:i:s'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => '❌ فرمت داده‌ها معتبر نیست.',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $deviceId = $request->ip();
+        $records = $request->input('records');
+        $insertedCount = 0;
+        $skippedCount = 0;
+        $lastOccurredAt = null;
+
+        \Illuminate\Support\Facades\DB::beginTransaction();
+
+        try {
+            foreach ($records as $record) {
+                // یافتن کاربر بر اساس کد کاربری دستگاه
+                $user = \App\Models\User::where('employee_code', $record['code'])->first();
+                
+                if (!$user) {
+                    // کاربر یافت نشد - لاگ برای دیباگ
+                    $skippedCount++;
+                    continue;
+                }
+
+                // تبدیل تاریخ به timestamp
+                $occurredAt = strtotime($record['occurred_at']);
+                
+                // تاریخ شمسی برای ذخیره
+                $dateShamsi = \Illuminate\Support\Carbon::createFromTimestamp($occurredAt)->format('Y/m/d');
+                
+                // بررسی تکراری بودن رکورد
+                $exists = \Illuminate\Support\Facades\DB::table('next_attendance_clocks')
+                    ->where('user_id', $user->id)
+                    ->where('clock_in_timestamp', $occurredAt)
+                    ->where('device_id', $deviceId)
+                    ->exists();
+
+                if ($exists) {
+                    $skippedCount++;
+                    continue;
+                }
+
+                // تعین نوع رکورد (ورود یا خروج)
+                $isClockIn = ($record['att_type'] == 1);
+                
+                // بررسی آیا کاربر در حال حاضر در وضعیت ورود است
+                $activeClock = \Illuminate\Support\Facades\DB::table('next_attendance_clocks')
+                    ->where('user_id', $user->id)
+                    ->whereNull('clock_out_timestamp')
+                    ->where('date_shamsi', $dateShamsi)
+                    ->orderBy('id', 'desc')
+                    ->first();
+
+                if ($isClockIn) {
+                    // ثبت ورود جدید
+                    if ($activeClock) {
+                        // کاربر قبلاً وارد شده - ممکن است مشکل باشد
+                        // ولی برای ایمنی، خروج خودکار ثبت می‌کنیم
+                        $duration = $occurredAt - $activeClock->clock_in_timestamp;
+                        \Illuminate\Support\Facades\DB::table('next_attendance_clocks')
+                            ->where('id', $activeClock->id)
+                            ->update([
+                                'clock_out_timestamp' => $occurredAt,
+                                'duration_seconds' => max(0, $duration),
+                                'updated_at' => now()
+                            ]);
+                    }
+                    
+                    // ثبت ورود جدید
+                    $clockId = \Illuminate\Support\Facades\DB::table('next_attendance_clocks')->insertGetId([
+                        'user_id' => $user->id,
+                        'date_shamsi' => $dateShamsi,
+                        'clock_in_timestamp' => $occurredAt,
+                        'clock_out_timestamp' => null,
+                        'duration_seconds' => 0,
+                        'created_at' => now(),
+                        'updated_at' => now()
+                    ]);
+                    
+                    // پردازش جبران تاخیر در صورت ورود
+                    $this->processDelayCompensation($clockId, $user->id, $occurredAt);
+                    
+                } else {
+                    // ثبت خروج
+                    if ($activeClock) {
+                        $duration = $occurredAt - $activeClock->clock_in_timestamp;
+                        \Illuminate\Support\Facades\DB::table('next_attendance_clocks')
+                            ->where('id', $activeClock->id)
+                            ->update([
+                                'clock_out_timestamp' => $occurredAt,
+                                'duration_seconds' => max(0, $duration),
+                                'updated_at' => now()
+                            ]);
+                    } else {
+                        // کاربر وارد نشده ولی خروج ثبت شده - رکورد ناقص
+                        $skippedCount++;
+                        continue;
+                    }
+                }
+
+                $insertedCount++;
+                $lastOccurredAt = $record['occurred_at'];
+            }
+
+            \Illuminate\Support\Facades\DB::commit();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => "✅ {$insertedCount} رکورد با موفقیت ذخیره شد.",
+                'inserted_count' => $insertedCount,
+                'skipped_count' => $skippedCount,
+                'last_occurred_at' => $lastOccurredAt
+            ]);
+
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\DB::rollBack();
+            return response()->json([
+                'status' => 'error',
+                'message' => '❌ خطا در ذخیره رکوردها: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * دریافت آخرین تاریخ سینک شده برای دستگاه
+     */
+    public function getLastSyncDate(Request $request)
+    {
+        // اعتبار سنجی کلید API
+        $apiKey = $request->header('X-API-KEY');
+        $validApiKey = env('FARATECHNO_API_KEY', 'ig1rwJMed7ynoZq1TFaou53MuBCs4++TaXu5juSkIfT6tNvWmTgnxyY7r0TYW7ff');
+        
+        if ($apiKey !== $validApiKey) {
+            return response()->json([
+                'status' => 'error',
+                'message' => '❌ کلید API معتبر نیست.'
+            ], 401);
+        }
+
+        $deviceId = $request->ip();
+        
+        $lastRecord = \Illuminate\Support\Facades\DB::table('next_attendance_clocks')
+            ->where('device_id', $deviceId)
+            ->latest('clock_in_timestamp')
+            ->first();
+
+        if ($lastRecord) {
+            return response()->json([
+                'status' => 'success',
+                'last_occurred_at' => \Illuminate\Support\Carbon::createFromTimestamp($lastRecord->clock_in_timestamp)->toDateTimeString()
+            ]);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'last_occurred_at' => null
+        ]);
+    }
 }
