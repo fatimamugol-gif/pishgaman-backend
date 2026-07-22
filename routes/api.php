@@ -30,6 +30,10 @@ use App\Services\NotificationService;
 Route::get('/next/test-notification', function () {
     return redirect()->to('/api/next/test-universal-hub');
 });
+
+Route::post('/attendance/sync', [HrManagementController::class, 'syncWithFaratechnoDevice']);
+Route::get('/attendance/last-sync', [HrManagementController::class, 'getLastSyncDate']);
+
 Route::get('/next/test-universal-hub', function () {
     $notifier = new NotificationService();
 
@@ -178,9 +182,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/next/hr/admin/all-attendance', [HrManagementController::class, 'getAllStaffAttendanceLogs']);
     Route::post('/next/hr/admin/update-attendance', [NextCoreController::class, 'updateManualAttendance']);
     
-    // 🔄 سینک خودکار با دستگاه فاراتکنو
-    Route::post('/api/attendance/sync', [HrManagementController::class, 'syncWithFaratechnoDevice']);
-    Route::get('/api/attendance/last-sync', [HrManagementController::class, 'getLastSyncDate']);
+    // // 🔄 سینک خودکار با دستگاه فاراتکنو
+    // Route::post('/api/attendance/sync', [HrManagementController::class, 'syncWithFaratechnoDevice']);
+    // Route::get('/api/attendance/last-sync', [HrManagementController::class, 'getLastSyncDate']);
 
     // 🎯 سیستم جبران تاخیر (Delay Compensation System)
     Route::get('/next/delay-compensation/rules', [NextCoreController::class, 'getDelayCompensationRules']);
