@@ -15,6 +15,7 @@ class AttendanceClock extends Model
         'user_id',
         'date_shamsi',
         'clock_in',
+        'clock_in_timestamp',
         'clock_out',
         'duration_seconds',
     ];

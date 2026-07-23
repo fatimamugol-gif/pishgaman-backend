@@ -41,4 +41,8 @@ return [
         'webhook_secret' => env('PERFEX_WEBHOOK_SECRET'),
     ],
 
+    'faratechno' => [
+    'api_key' => env('FARATECHNO_API_KEY'),
+],
+
 ];

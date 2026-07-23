@@ -2,7 +2,7 @@
 title CRM Pishgaman Core Launcher
 
 echo 🚀 Starting Backend Services...
-cd /d "C:\Users\payon\Desktop\crm\perfex-brain"
+cd /d "C:\Users\payon\Desktop\ai crm\backend"
 
 :: 1. اجرای وب‌سرور لاراول
 start "Laravel Server" php artisan serve
@@ -18,7 +18,7 @@ start "Asterisk AMI Listener" php artisan asterisk:ami-listen
 
 echo 🎨 Starting Frontend Next.js Server...
 :: اینجا اگر مسیر پروژه فرانتت در پوشه دیگری است آدرسش را اصلاح کن
-cd /d "C:\Users\payon\Desktop\crm\front\my-pishgaman-dashboard" 
+cd /d "C:\Users\payon\Desktop\ai crm\front\my-pishgaman-dashboard" 
 start "Next.js Frontend" pnpm dev --port 3001
 
 echo 🔥 All engines started successfully! Close this window to keep them running.
