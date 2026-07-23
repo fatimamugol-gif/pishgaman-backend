@@ -671,35 +671,36 @@ class HrManagementController extends Controller
 
             $logTimestamp = strtotime($logTimeStr);
 
-            // 🎯 ۴. پیدا کردن کاربر مربوطه (از طریق agents یا مستقیماً از users)
-$agent = DB::table('agents')->where('attendance_id', $attendanceId)->first();
-$user = null;
+            // 🎯 ۴. پیدا کردن کاربر واقعی سیستم بر اساس کد تردد (attendance_code)
+            $user = null;
 
-// ۱. ابتدا جستجو بر اساس ایمیل agent در جدول users
-if ($agent && !empty($agent->email)) {
-    $user = DB::table('users')->where('email', $agent->email)->first();
-}
+            // ۱. اولویت اول: جستجو بر اساس attendance_code در جدول users (کاربران واقعی)
+            $user = DB::table('users')
+                ->where('attendance_code', $attendanceId)
+                ->first();
 
-// ۲. اگر از طریق agent پیدا نشد، بر اساس ایمیل اختصاصی دستگاه جستجو کن
-if (!$user) {
-    $user = DB::table('users')
-        ->where('email', 'user_' . $attendanceId . '@local.com')
-        ->first();
-}
+            // ۲. اولویت دوم (در صورت عدم وجود): جستجو از طریق جدول agents بر اساس attendance_id
+            if (!$user) {
+                $agent = DB::table('agents')->where('attendance_id', $attendanceId)->first();
+                if ($agent && !empty($agent->email)) {
+                    $user = DB::table('users')->where('email', $agent->email)->first();
+                }
+            }
 
-// ۳. اگر کاربر وجود نداشت، یک کاربر هماهنگ با فیلدهای استاندارد لاراول بساز
-if (!$user) {
-    $newUserId = DB::table('users')->insertGetId([
-        'name'       => $agent->name ?? ('کاربر ' . $attendanceId),
-        'email'      => $agent->email ?? ('user_' . $attendanceId . '@local.com'),
-        'password'   => bcrypt('12345678'),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
+            // ۳. اولویت سوم: اگر کاربر اصلاً وجود نداشت، کاربر ساختگی ایجاد کن
+            if (!$user) {
+                $newUserId = DB::table('users')->insertGetId([
+                    'name'            => 'کاربر ' . $attendanceId,
+                    'email'           => 'user_' . $attendanceId . '@local.com',
+                    'attendance_code' => $attendanceId, // ذخیره کد تردد برای مراجعات بعدی
+                    'password'        => bcrypt('12345678'),
+                    'created_at'      => now(),
+                    'updated_at'      => now(),
+                ]);
 
-    $user = DB::table('users')->where('id', $newUserId)->first();
-    $createdUsersCount++;
-}
+                $user = DB::table('users')->where('id', $newUserId)->first();
+                $createdUsersCount++;
+            }
             // 🎯 ۵. مدیریت ورود و خروج در جدول next_attendance_clocks
             $openClock = DB::table('next_attendance_clocks')
                 ->where('user_id', $user->id)
